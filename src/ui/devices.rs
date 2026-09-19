@@ -252,7 +252,8 @@ pub fn popup(app: &mut App, ctx: &egui::Context) {
                     ui,
                     egui::ScrollArea::vertical()
                         .id_salt("connect-device-list")
-                        .max_height(max_height),
+                        .max_height(max_height)
+                        .min_scrolled_height(max_height),
                     egui::Vec2b::new(false, true),
                     |ui| {
                         if !app.local_ready {
@@ -391,6 +392,89 @@ mod tests {
         assert!(
             !receiver_is_listed(&receiver, &[device]),
             "two identities may have the same name"
+        );
+    }
+
+    #[test]
+    fn devices_popup_height_expands_when_devices_are_added() {
+        let root = std::env::temp_dir().join(format!(
+            "fastpotify-devices-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        let mut app = App::new(
+            &crate::backend::Waker::default(),
+            crate::paths::AppDirs {
+                config: root.join("config"),
+                state: root.join("state"),
+                cache: root.join("cache"),
+            },
+            crate::settings::Settings::default(),
+            crate::app::AppOptions {
+                media_controls: false,
+                restore_sign_in: false,
+                tray: false,
+            },
+        );
+        app.show_devices = true;
+        app.local_ready = true;
+        app.local_device_id = Some("local-dev".into());
+
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        crate::theme::apply(&ctx, &app.palette);
+        let button_rect = Rect::from_min_size(pos2(500.0, 700.0), vec2(30.0, 30.0));
+        ctx.data_mut(|data| {
+            data.insert_temp(egui::Id::new(BUTTON_RECT_ID), button_rect);
+        });
+
+        let run_frame = |app: &mut App, ctx: &egui::Context| {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 800.0))),
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |_ui| {
+                popup(app, ctx);
+            });
+            output.textures_delta.clear();
+        };
+
+        // Frame 1: only local device present
+        run_frame(&mut app, &ctx);
+        let area_id = egui::Id::new("devices-popup");
+        let state_1 = egui::AreaState::load(&ctx, area_id).expect("area state 1");
+        let h1 = state_1.size.expect("size 1").y;
+
+        // Frame 2: multiple remote devices added
+        for i in 1..=4 {
+            app.devices.push(Device {
+                id: Some(format!("remote-{i}")),
+                name: format!("Speaker {i}"),
+                kind: "speaker".into(),
+                ..Default::default()
+            });
+        }
+        run_frame(&mut app, &ctx);
+        let state_2 = egui::AreaState::load(&ctx, area_id).expect("area state 2");
+        let h2 = state_2.size.expect("size 2").y;
+
+        assert_eq!(h2, 336.0);
+        assert!(
+            h2 > h1,
+            "popup height should expand when devices are added: h1={h1}, h2={h2}"
+        );
+
+        // Frame 3: devices are removed, popup height shrinks back down
+        app.devices.clear();
+        run_frame(&mut app, &ctx);
+        let state_3 = egui::AreaState::load(&ctx, area_id).expect("area state 3");
+        let h3 = state_3.size.expect("size 3").y;
+        assert!(
+            (h3 - h1).abs() <= 1.0,
+            "popup height should shrink when devices are removed: h3={h3}, h1={h1}"
         );
     }
 }
